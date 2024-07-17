@@ -1,29 +1,31 @@
 /**
-  * @author: Max Souza
-  * @github: https://github.com/Maaacs
-  * @repo: https://github.com/Maaacs/Android-Tracker
-  * 
-  * Description:
-  * This code is part of the Android Tracker project, which
-  * provides a graphical interface for real-time monitoring of Android devices.
-  *
-  * Contributions are welcome. To contribute, please visit the project's repository on GitHub.
-  *
-  * License:
-  * This code is distributed under the MIT license, meaning it can be used,
-  * copied, modified, and distributed freely, provided that the same authorship header is maintained.
-  *
-  * Copyright © 2024 Max Souza
-*/
+ * @author: Max Souza
+ * @github: https://github.com/Maaacs
+ * @repo: https://github.com/Maaacs/Android-Tracker
+ * 
+ * Description:
+ * This code is part of the Android Tracker project, which
+ * provides a graphical interface for real-time monitoring of Android devices.
+ *
+ * Contributions are welcome. To contribute, please visit the project's repository on GitHub.
+ *
+ * License:
+ * This code is distributed under the MIT license, meaning it can be used,
+ * copied, modified, and distributed freely, provided that the same authorship header is maintained.
+ *
+ * Copyright © 2024 Max Souza
+ */
 
 "use client"
 import React, { useState, useEffect } from 'react';
 import { Button } from "@/components/ui/button"
 import { CardTitle, CardDescription, CardHeader, CardContent, Card } from "@/components/ui/card"
 import { LineChart } from '@mui/x-charts/LineChart';
-import { Checkbox } from "@/components/ui/checkbox"
-import { TableCell, TableRow, TableHeader, TableBody, Table } from "@/components/ui/table"
-
+import LogTable from "@/components/ui/LogTable";
+import { saveAs } from 'file-saver';
+import { FiDownload } from 'react-icons/fi';
+import { Log } from "@/types/types"; 
+import axios from 'axios';
 
 export function Tracker() {
   const [deviceName, setDeviceName] = useState<string>('');
@@ -37,8 +39,11 @@ export function Tracker() {
   const [graphTemperatureData, setGraphTemperatureData] = useState<GraphData[]>([{ id: "Temperature", data: [] }]);
   const [graphClockData, setGraphClockData] = useState<GraphData[]>([{ id: "Clock", data: [] }]);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [currentFilename, setCurrentFilename] = useState<string>(''); 
+  const [logs, setLogs] = useState<Log[]>([]);
+  const [logFilename, setLogFilename] = useState('logcat.txt'); 
+  const [isLogcatRunning, setIsLogcatRunning] = useState(false); 
   
-
   interface DataPoint {
     x: number | string;
     y: number;
@@ -49,44 +54,39 @@ export function Tracker() {
     data: DataPoint[];
   }
   
-
   const convertedData = graphTemperatureData[0].data.map((item) => ({
-    x: item.x, 
+    x: item.x,
     y: item.y,
   }));
   
-
   const convertedDataClock = graphClockData[0].data.map((item) => ({
-    x: item.x, 
+    x: item.x,
     y: item.y,
   }));
-
-
+  
   const toggleCapture = () => {
     if (!isCapturing) {
       setTemperatureReadings([]);
       setClockSpeedReadings([]);
+      startLogcat();
     } else {
       const tempSum = temperatureReadings.reduce((acc, val) => acc + val, 0);
       const clockSum = clockSpeedReadings.reduce((acc, val) => acc + val, 0);
       setAverageTemperature(`${(tempSum / temperatureReadings.length).toFixed(2)}°C`);
       setAverageClockSpeed(`${(clockSum / clockSpeedReadings.length).toFixed(2)} GHz`);
+      stopLogcat();
     }
     setIsCapturing(!isCapturing);
   };
-
-
+  
   useEffect(() => {
     const fetchData = () => {
-
       fetch('/api/model')
-      .then(response => response.json())
-      .then(data => setDeviceName(data.model));
-
+        .then(response => response.json())
+        .then(data => setDeviceName(data.model));
       fetch('/api/build')
         .then(response => response.json())
         .then(data => setBuildVersion(data.buildVersion));
-
       fetch('/api/temperature')
         .then(response => response.json())
         .then(data => {
@@ -99,7 +99,6 @@ export function Tracker() {
             }]);
           }
         });
-  
       fetch('/api/clock')
         .then(response => response.json())
         .then(data => {
@@ -113,14 +112,13 @@ export function Tracker() {
           }
         });
     };
-  
     let intervalId: ReturnType<typeof setInterval> | null = null;
     if (isCapturing) {
-      fetchData(); 
-      intervalId = setInterval(fetchData, 100); //Milliseconds
+      fetchData();
+      intervalId = setInterval(fetchData, 100); // Milliseconds
     } else {
       if (intervalId !== null) {
-        clearInterval(intervalId); 
+        clearInterval(intervalId);
       }
     }
     return () => {
@@ -128,12 +126,9 @@ export function Tracker() {
         clearInterval(intervalId);
       }
     };
-
-  }, [isCapturing]); 
+  }, [isCapturing]);
   
   
-
-  // Convert to hour
   const valueFormatter = (value: number | string) => {
     const date = new Date(value);
     return date.getHours().toString().padStart(2, '0') + ':' +
@@ -141,6 +136,85 @@ export function Tracker() {
            date.getSeconds().toString().padStart(2, '0');
   };
   
+  const startLogcat = async () => {
+    const date = new Date();
+    const filename = `logcat-${date.getDate()}-${date.getMonth() + 1}-${date.getFullYear()}.txt`;
+    setCurrentFilename(filename); 
+    setLogFilename(filename); 
+    try {
+      // Limpa o buffer do logcat antes de iniciar
+      await fetch('/api/logcat?action=clear');
+      // Inicia a captura do logcat
+      await axios.get(`/api/logcat?action=start&filename=${filename}`);
+      setIsLogcatRunning(true);
+      console.log('Coleta de logcat iniciada.');
+    } catch (error) {
+      console.error('Erro ao iniciar a coleta de logcat:', error);
+    }
+  };
+  
+  const stopLogcat = async () => {
+    try {
+      // Para a captura do logcat
+      await axios.get('/api/logcat?action=stop');
+      setIsLogcatRunning(false);
+      console.log('Coleta de logcat interrompida.');
+      fetchLogs();
+    } catch (error) {
+      console.error('Erro ao interromper a coleta de logcat:', error);
+    }
+  };
+  
+  const fetchLogs = async () => {
+    try {
+      const response = await axios.get(`/api/logcat-content?filename=${logFilename}`);
+      if (response.status === 200) {
+        setLogs(response.data.logContent.split('\n'));
+      }
+    } catch (error) {
+      console.error('Erro ao buscar logs:', error);
+    }
+  };
+  
+  // Função para baixar o arquivo de log
+  const downloadLog = () => {
+    if (currentFilename) {
+      fetch(`/api/download-logcat?filename=${currentFilename}`)
+        .then(res => res.blob()) 
+        .then(blob => saveAs(blob, currentFilename)); 
+    } else {
+      console.error('Nome do arquivo de log não definido.');
+    }
+  };
+  
+  useEffect(() => {
+    const fetchLatestLogs = async () => {
+      if (isCapturing && currentFilename) {
+        try {
+          const response = await fetch(`/api/logcat-latest?filename=${currentFilename}&lines=20`); // Busca as últimas 20 linhas
+          const data = await response.json();
+          if (data.logs) {
+            setLogs(data.logs);
+          }
+        } catch (error) {
+          console.error('Erro ao buscar os últimos logs:', error);
+        }
+      }
+    };
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    if (isCapturing) {
+      intervalId = setInterval(fetchLatestLogs, 2000); // Busca logs a cada 2 segundos
+    } else {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+      }
+    }
+    return () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [isCapturing, currentFilename]);
 
   return (
     (<div className="flex flex-col h-screen">
@@ -158,6 +232,10 @@ export function Tracker() {
           </Button>
           <Button size="sm" variant="outline">
             Settings
+          </Button>
+          <Button size="sm" variant="outline" onClick={downloadLog}> 
+            <FiDownload className="h-4 w-4 mr-2" />
+            Download Logs
           </Button>
         </nav>
       </header>
@@ -279,44 +357,7 @@ export function Tracker() {
             <CardDescription>System logs</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableCell className="w-1">
-                    <Checkbox />
-                  </TableCell>
-                  <TableCell>Timestamp</TableCell>
-                  <TableCell>Level</TableCell>
-                  <TableCell>Message</TableCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow>
-                  <TableCell className="w-1">
-                    <Checkbox />
-                  </TableCell>
-                  <TableCell>2023-08-12 10:23:45</TableCell>
-                  <TableCell>Info</TableCell>
-                  <TableCell>Application started</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="w-1">
-                    <Checkbox />
-                  </TableCell>
-                  <TableCell>2023-08-12 10:24:12</TableCell>
-                  <TableCell>Error</TableCell>
-                  <TableCell>Connection failed</TableCell>
-                </TableRow>
-                <TableRow>
-                  <TableCell className="w-1">
-                    <Checkbox />
-                  </TableCell>
-                  <TableCell>2023-08-12 10:25:01</TableCell>
-                  <TableCell>Warning</TableCell>
-                  <TableCell>Battery low</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+            <LogTable logs={logs} onDownload={downloadLog} /> 
           </CardContent>
         </Card>
       </main>
@@ -354,7 +395,6 @@ function MonitorIcon(props: React.SVGProps<SVGSVGElement>) {
   )
 }
 
-
 function ThermometerIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -373,7 +413,6 @@ function ThermometerIcon(props: React.SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
-
 
 function ClockIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -394,7 +433,6 @@ function ClockIcon(props: React.SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
-
 
 function ActivityIcon(props: React.SVGProps<SVGSVGElement>) {
   return (

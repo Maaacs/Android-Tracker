@@ -1,55 +1,66 @@
-/**
-  * @author: Max Souza
-  * @github: https://github.com/Maaacs
-  * @repo: https://github.com/Maaacs/Android-Tracker
-  * 
-  * Description:
-  * This code is part of the Android Tracker project, which
-  * provides a graphical interface for real-time monitoring of Android devices.
-  *
-  * Contributions are welcome. To contribute, please visit the project's repository on GitHub.
-  *
-  * License:
-  * This code is distributed under the MIT license, meaning it can be used,
-  * copied, modified, and distributed freely, provided that the same authorship header is maintained.
-  *
-  * Copyright © 2024 Max Souza
-*/
-
 import { NextApiRequest, NextApiResponse } from 'next';
 import { exec, spawn } from 'child_process';
+import fs from 'fs';
 
-let logcat = '';
-
-const writeLogcat = () => {
-  const logcatProcess = spawn('adb', ['logcat', '-v', 'time']);
-  logcatProcess.stdout.on('data', (data) => {
-    logcat += data.toString();
-  });
-  logcatProcess.on('error', (error) => {
-    console.error(`Error writing logcat:: ${error}`);
-  });
-};
-
-const clearLogcat = () => {
-  exec('adb logcat -c', (error) => {
-    if (error) {
-      console.error(`Error clearing logcat buffer: ${error}`);
-    } else {
-      logcat = '';
-    }
-  });
-};
+let logcatProcess: any = null; // Para armazenar a referência ao processo do logcat
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  const action = req.query.action;
+  const { action, filename } = req.query;
+
   if (action === 'clear') {
-    clearLogcat();
-    res.send('OK');
-  } else if (action === 'write') {
-    writeLogcat();
-    res.send('OK');
+    // Limpar o buffer do logcat
+    exec('adb logcat -c', (error) => {
+      if (error) {
+        console.error(`Erro ao limpar o buffer do logcat: ${error}`);
+        res.status(500).json({ message: 'Erro ao limpar o logcat.' });
+      } else {
+        res.status(200).json({ message: 'Logcat limpo com sucesso!' });
+      }
+    });
+
+  } else if (action === 'start' && filename) {
+    // Iniciar a captura do logcat
+    if (logcatProcess) {
+      // Se já houver um processo em execução, avise
+      return res.status(400).json({ message: 'A captura do logcat já está em andamento.' });
+    }
+
+    try {
+      // Inicia o processo do logcat
+      logcatProcess = spawn('adb', ['logcat', '-v', 'time']);
+      const logStream = fs.createWriteStream(filename as string, { flags: 'a' });
+      logcatProcess.stdout.pipe(logStream);
+
+      console.log('Processo do Logcat iniciado ID:', logcatProcess.pid);
+
+      logcatProcess.stdout.on('data', (data: Buffer) => {
+        console.log(`Logcat: ${data}`);
+      });
+
+      logcatProcess.stderr.on('data', (data: Buffer) => {
+        console.error(`Erro no logcat: ${data}`);
+      });
+
+      setTimeout(() => {
+        res.status(200).json({ message: 'Coleta de logcat iniciada.', pid: logcatProcess.pid });
+      }, 1000);
+
+    } catch (error) {
+      console.error('Erro ao iniciar a coleta de logcat:', error);
+      res.status(500).json({ message: 'Erro ao iniciar a coleta de logcat.' });
+    }
+
+  } else if (action === 'stop') {
+    // Parar a captura do logcat
+    if (logcatProcess) {
+      logcatProcess.kill();
+      logcatProcess = null;
+      res.status(200).json({ message: 'Coleta de logcat interrompida.' });
+    } else {
+      res.status(400).json({ message: 'Nenhuma captura de logcat em andamento.' });
+    }
+
   } else {
-    res.status(400).send('Invalid action.');
+    res.status(400).send('Ação inválida ou nome de arquivo ausente.');
   }
 }
